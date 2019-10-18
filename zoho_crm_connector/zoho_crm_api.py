@@ -30,7 +30,7 @@ import logging
 import urllib.parse
 from pathlib import Path
 from datetime import datetime
-from typing import Optional,Tuple,List,Dict,Generator
+from typing import Optional, Tuple, List, Dict, Generator, Union
 import requests
 from requests.adapters import HTTPAdapter,Retry
 
@@ -106,34 +106,46 @@ class Zoho_crm:
         self.token_file_path = token_file_dir / token_file_name
         self.current_token =self._load_access_token()
 
-
-    def _validate_response(self, r:requests.Response)->Optional[dict]:
+    def _validate_response(self, r: requests.Response, retry: bool = False) -> \
+        Tuple[requests.Response, Union[None,Dict]]:
         """ Called internally to deal with Zoho API responses. Will fetch a new access token if necessary.
         Not all errors are explicity handled; errors not handled here have no recovery option anyway,
         so an exception is raised."""
         # https://www.zoho.com/crm/help/api/v2/#HTTP-Status-Codes
         if r.status_code == 200:
-            return r.json()
+            return (r, r.json())
         elif r.status_code == 201:
-            return {'result':True} #insert succeeded
-        elif r.status_code == 202: #multiple insert succeeded
-            return {'result':True}
-        elif r.status_code == 204: #no content
-            return None
+            return (r, None)  #insert succeeded
+        elif r.status_code == 202:  #multiple insert succeeded
+            return (r, None)
+        elif r.status_code == 204:  #no content
+            return (r, None)
         elif r.status_code == 304:  # nothing changed since the requested modified-since timestamp
-            return None
+            return (r, None)
         elif r.status_code == 401:
+            if retry:
+                raise RuntimeError(
+                    f"Authentication failure trying: {r.reason}"
+                    f" and status code: {r.status_code} and text {r.text},"
+                    f" attempted url was: {r.url},"
+                    f" unquoted is: {urllib.parse.unquote(r.url)}")
             #assume invalid token
             self._refresh_access_token()
             #retry the request somehow
             # probably should use a 'retry' exception?
             orig_request = r.request
-            orig_request.headers['Authorization'] = 'Zoho-oauthtoken ' + self.current_token['access_token']
+            orig_request.headers[
+                'Authorization'] = 'Zoho-oauthtoken ' + self.current_token[
+                    'access_token']
             new_resp = self.requests_session.send(orig_request)
 
-            return new_resp.json()
+            return self._validate_response(new_resp, retry=True)
         else:
-            raise RuntimeError(f"API failure trying: {r.reason} and status code: {r.status_code} and text {r.text}, attempted url was: {r.url}, unquoted is: {urllib.parse.unquote(r.url)}")
+            raise RuntimeError(
+                f"Authentication failure trying: {r.reason}"
+                f" and status code: {r.status_code} and text {r.text},"
+                f" attempted url was: {r.url},"
+                f" unquoted is: {urllib.parse.unquote(r.url)}")
 
 
     def yield_page_from_module(self, module_name:str, criteria:str=None,
@@ -345,14 +357,8 @@ class Zoho_crm:
             headers['If-Modified-Since'] = modified_since.isoformat()
         r = self.requests_session.get(url=url, headers=headers)
 
-        r_json = self._validate_response(r)
-        if r.ok and r_json is not None:
-            return True, r_json['data']
-        elif r.ok:
-            return True, r_json
-        else:
-            return False, r_json
-
+        response, r_json = self._validate_response(r)
+        return r_json['data'] if r_json else None
 
     def _load_access_token(self)->dict:
         try:
