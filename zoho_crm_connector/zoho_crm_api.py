@@ -75,6 +75,10 @@ def _requests_retry_session(
 
 #         return self.__session.send(res.request)
 
+#         req = res.request
+#         logger.info('Resending request', req.method, req.url, req.headers)
+#         req.headers['Authorization'] = self.__session.headers[
+#             'Authorization']  # why is it needed?
 
 class ZohoCRM:
     """ An authenticated connection to zoho crm.
